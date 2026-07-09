@@ -455,6 +455,7 @@ const grab=$('grabCanvas');
 function isSecure(){ return window.isSecureContext || ['localhost','127.0.0.1'].includes(location.hostname); }
 
 async function startCamera(deviceId){
+  deviceId = (typeof deviceId==='string') ? deviceId : null;   // ignore click-event args
   $('result').classList.add('hidden');
   if(!isSecure()){
     setStatus('🔒 The camera needs a secure page. Open this app over <b>https://</b> (or localhost). You can still <b>upload a photo</b> below.','err');
@@ -696,7 +697,7 @@ function loadViaImgTag(file){
 }
 
 /* ---------------- Wire up ---------------- */
-$('startBtn').onclick=startCamera;
+$('startBtn').onclick=()=>startCamera();
 $('captureBtn').onclick=manualCapture;
 $('stopBtn').onclick=()=>{ stopCamera(); clearStatus(); };
 $('torchBtn').onclick=toggleTorch;
