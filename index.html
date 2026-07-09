@@ -9,10 +9,12 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <title>Aadhaar QR Scanner</title>
 <link rel="manifest" href="manifest.json" />
-<!-- pako for gunzip of the Secure-QR payload -->
+<!-- pako: gunzip the Secure-QR payload -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
-<!-- jsQR: pure-JS fallback for browsers without a native BarcodeDetector (iOS Safari) -->
+<!-- jsQR: pure-JS QR decoder (fallback engine, works on iOS Safari) -->
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<!-- ZXing: robust decoder with TRY_HARDER, best on blurry / low-contrast dense QR -->
+<script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
 <style>
   :root{
     --brand:#0b3d91; --brand2:#1565c0; --bg:#eef1f8; --card:#fff;
@@ -37,8 +39,6 @@
     background:var(--card); border-radius:16px; padding:16px;
     box-shadow:0 4px 18px rgba(16,24,64,.07); margin-bottom:14px;
   }
-
-  /* ---- camera viewport ---- */
   .stage{
     position:relative; width:100%; aspect-ratio:1/1; background:#0c1222;
     border-radius:14px; overflow:hidden; display:flex; align-items:center; justify-content:center;
@@ -49,13 +49,9 @@
     align-items:center; justify-content:center; color:#9fb0d0; font-size:13px; text-align:center; padding:24px;
   }
   .stage .placeholder svg{ width:46px; height:46px; opacity:.7; }
-  /* scan reticle */
   .reticle{ position:absolute; inset:0; pointer-events:none; display:none; }
   .reticle.on{ display:block; }
-  .reticle .frame{
-    position:absolute; inset:12%; border-radius:14px;
-    box-shadow:0 0 0 3000px rgba(6,10,26,.35);
-  }
+  .reticle .frame{ position:absolute; inset:12%; border-radius:14px; box-shadow:0 0 0 3000px rgba(6,10,26,.35); }
   .reticle .corner{ position:absolute; width:26px; height:26px; border:3px solid #fff; }
   .reticle .tl{ top:11%; left:11%; border-right:0; border-bottom:0; border-radius:8px 0 0 0; }
   .reticle .tr{ top:11%; right:11%; border-left:0; border-bottom:0; border-radius:0 8px 0 0; }
@@ -63,13 +59,11 @@
   .reticle .br{ bottom:11%; right:11%; border-left:0; border-top:0; border-radius:0 0 8px 0; }
   .reticle .laser{
     position:absolute; left:13%; right:13%; height:2px; top:14%;
-    background:linear-gradient(90deg,transparent,#4fc3f7,transparent);
-    animation:scan 2.2s ease-in-out infinite;
+    background:linear-gradient(90deg,transparent,#4fc3f7,transparent); animation:scan 2.2s ease-in-out infinite;
   }
   @keyframes scan{ 0%{top:14%}50%{top:84%}100%{top:14%} }
   @media (prefers-reduced-motion: reduce){ .reticle .laser{ animation:none; } }
 
-  /* ---- buttons ---- */
   .btns{ display:flex; flex-direction:column; gap:10px; margin-top:12px; }
   .row{ display:flex; gap:10px; }
   .row>button{ flex:1; }
@@ -81,8 +75,8 @@
   button:disabled{ opacity:.45; cursor:not-allowed; }
   button.secondary{ background:#5b6b7d; }
   button.ghost{ background:#eef2ff; color:var(--brand); }
+  button.accent{ background:linear-gradient(135deg,#7b1fa2,#5e35b1); }
   button.tiny{ padding:11px; font-size:14px; }
-
   .hint{ font-size:12px; color:var(--muted); text-align:center; margin-top:10px; line-height:1.5; }
   .status{ font-size:13px; padding:10px 12px; border-radius:10px; margin-top:12px; display:none; line-height:1.45; }
   .status.show{ display:block; }
@@ -90,7 +84,9 @@
   .status.err{ background:#fdeceb; color:var(--err); }
   .status.warn{ background:#fff8e1; color:var(--warn); }
   .status.info{ background:#e8f0fe; color:var(--brand); }
-
+  .bar{ height:4px; border-radius:4px; background:#dfe6f5; margin-top:8px; overflow:hidden; display:none; }
+  .bar.show{ display:block; }
+  .bar > i{ display:block; height:100%; width:0; background:var(--brand2); transition:width .12s linear; }
   table{ width:100%; border-collapse:collapse; }
   td{ padding:10px 6px; border-bottom:1px solid var(--line); font-size:14px; vertical-align:top; }
   tr:last-child td{ border-bottom:0; }
@@ -109,7 +105,7 @@
 <body>
 <header>
   <h1>Aadhaar QR Scanner</h1>
-  <p>Reads the Secure QR on an Aadhaar card / e-Aadhaar — fully offline</p>
+  <p>Reads the Secure QR — even low-quality scans — fully offline</p>
 </header>
 
 <main>
@@ -133,6 +129,7 @@
 
     <div class="btns">
       <button id="startBtn">📷 Start camera</button>
+      <button id="captureBtn" class="accent hidden">✨ Capture &amp; enhance</button>
       <div class="row hidden" id="liveRow">
         <button id="torchBtn" class="ghost tiny hidden">🔦 Torch</button>
         <button id="flipBtn" class="ghost tiny hidden">🔄 Flip</button>
@@ -143,10 +140,11 @@
     </div>
 
     <div class="hint">
-      The Secure QR is large &amp; dense. Fill the frame with it and hold steady.
-      If the camera struggles, <b>upload a sharp close-up photo</b> — it's the most reliable.
+      Works with blurry or low-resolution scans. Fill the frame with the QR; if it doesn’t
+      catch, tap <b>Capture &amp; enhance</b> — or <b>upload a photo</b> for the toughest cases.
     </div>
     <div id="status" class="status"></div>
+    <div id="bar" class="bar"><i id="barFill"></i></div>
   </div>
 
   <div id="result" class="card hidden">
@@ -166,356 +164,449 @@
 </footer>
 
 <canvas id="canvas"></canvas>
+<canvas id="baseCanvas"></canvas>
+<canvas id="grabCanvas"></canvas>
 
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
 
 /* ---------------- UI helpers ---------------- */
-function setStatus(msg, type){
-  const el = $('status');
-  el.innerHTML = msg;
-  el.className = 'status show ' + (type || 'info');
-}
-function clearStatus(){ $('status').className = 'status'; }
-function escapeHtml(s){
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
+function setStatus(msg, type){ const el=$('status'); el.innerHTML=msg; el.className='status show '+(type||'info'); }
+function clearStatus(){ $('status').className='status'; }
+function showBar(on){ $('bar').className = 'bar' + (on?' show':''); if(!on) $('barFill').style.width='0'; }
+function setBar(frac){ $('barFill').style.width = Math.max(0,Math.min(1,frac))*100 + '%'; }
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+const yieldUI = () => new Promise(r => setTimeout(r, 0));
 
 /* ---------------- Aadhaar decoders ---------------- */
 function decodeOldXml(text){
   const attr = n => { const m = text.match(new RegExp(n + '="([^"]*)"')); return m ? m[1] : ''; };
-  return {
-    format: 'Old XML QR',
-    data: {
-      'Aadhaar (last 4)': (attr('uid') || '').slice(-4),
-      'Name': attr('name'), 'Gender': attr('gender'),
-      'Year of birth': attr('yob') || attr('dob'),
-      'Care of': attr('co'), 'House': attr('house'), 'Street': attr('street'),
-      'Landmark': attr('lm'), 'Locality': attr('loc'), 'VTC': attr('vtc'),
-      'Post office': attr('po'), 'Sub district': attr('subdist'),
-      'District': attr('dist'), 'State': attr('state'), 'Pincode': attr('pc')
-    },
-    photo: null
-  };
+  return { format:'Old XML QR', data:{
+    'Aadhaar (last 4)':(attr('uid')||'').slice(-4),'Name':attr('name'),'Gender':attr('gender'),
+    'Year of birth':attr('yob')||attr('dob'),'Care of':attr('co'),'House':attr('house'),
+    'Street':attr('street'),'Landmark':attr('lm'),'Locality':attr('loc'),'VTC':attr('vtc'),
+    'Post office':attr('po'),'Sub district':attr('subdist'),'District':attr('dist'),
+    'State':attr('state'),'Pincode':attr('pc') }, photo:null };
 }
 
 function decodeSecureQr(bigIntStr){
-  let n;
-  try { n = BigInt(bigIntStr); } catch(e){ throw new Error('QR value is not numeric'); }
-  let hex = n.toString(16);
-  if (hex.length % 2) hex = '0' + hex;
-  const raw = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < raw.length; i++) raw[i] = parseInt(hex.substr(i * 2, 2), 16);
+  let n; try{ n=BigInt(bigIntStr); }catch(e){ throw new Error('QR value is not numeric'); }
+  let hex=n.toString(16); if(hex.length%2)hex='0'+hex;
+  const raw=new Uint8Array(hex.length/2);
+  for(let i=0;i<raw.length;i++) raw[i]=parseInt(hex.substr(i*2,2),16);
+  if(!(raw[0]===0x1f && raw[1]===0x8b)) throw new Error('PARTIAL_READ');
+  let bytes; try{ bytes=pako.ungzip(raw); }catch(e){ throw new Error('PARTIAL_READ'); }
 
-  // gzip magic — a partial/misread of the dense QR usually fails right here
-  if (!(raw[0] === 0x1f && raw[1] === 0x8b)) throw new Error('PARTIAL_READ');
-  let bytes;
-  try { bytes = pako.ungzip(raw); }
-  catch(e){ throw new Error('PARTIAL_READ'); }
+  const delim=[-1];
+  for(let i=0;i<bytes.length;i++) if(bytes[i]===255) delim.push(i);
+  const fields=['emailMobileIndicator','referenceId','name','dob','gender','careof','district',
+                'landmark','house','location','pincode','postoffice','state','street','subdistrict','vtc'];
+  if(delim.length < fields.length+1) throw new Error('PARTIAL_READ');
 
-  const delim = [-1];
-  for (let i = 0; i < bytes.length; i++) if (bytes[i] === 255) delim.push(i);
-  const fields = ['emailMobileIndicator','referenceId','name','dob','gender','careof',
-                  'district','landmark','house','location','pincode','postoffice',
-                  'state','street','subdistrict','vtc'];
-  if (delim.length < fields.length + 1) throw new Error('PARTIAL_READ');
+  const dec=new TextDecoder('utf-8'); const f={};
+  for(let i=0;i<fields.length;i++) f[fields[i]]=dec.decode(bytes.slice(delim[i]+1,delim[i+1])).trim();
 
-  const dec = new TextDecoder('utf-8');
-  const f = {};
-  for (let i = 0; i < fields.length; i++)
-    f[fields[i]] = dec.decode(bytes.slice(delim[i] + 1, delim[i + 1])).trim();
+  const ind=f.emailMobileIndicator;
+  const hashBytes=(ind==='1'||ind==='2')?32:(ind==='3'?64:0);
+  const photoStart=delim[fields.length]+1;
+  const photoEnd=bytes.length-256-hashBytes;
+  const photo=(photoEnd>photoStart)?bytes.slice(photoStart,photoEnd):null;
 
-  const ind = f.emailMobileIndicator;
-  const hashBytes = (ind === '1' || ind === '2') ? 32 : (ind === '3' ? 64 : 0);
-  const photoStart = delim[fields.length] + 1;
-  const photoEnd = bytes.length - 256 - hashBytes;
-  const photo = (photoEnd > photoStart) ? bytes.slice(photoStart, photoEnd) : null;
-
-  const ref = f.referenceId || '';
-  return {
-    format: 'Secure QR (UIDAI signed)',
-    data: {
-      'Aadhaar (last 4)': ref.slice(0, 4), 'Name': f.name, 'Date of birth': f.dob,
-      'Gender': ({M:'Male',F:'Female',T:'Transgender'}[f.gender] || f.gender),
-      'Care of': f.careof, 'House': f.house, 'Street': f.street, 'Landmark': f.landmark,
-      'Location': f.location, 'VTC': f.vtc, 'Post office': f.postoffice,
-      'Sub district': f.subdistrict, 'District': f.district, 'State': f.state, 'Pincode': f.pincode
-    },
-    photo: photo
-  };
+  const ref=f.referenceId||'';
+  return { format:'Secure QR (UIDAI signed)', data:{
+    'Aadhaar (last 4)':ref.slice(0,4),'Name':f.name,'Date of birth':f.dob,
+    'Gender':({M:'Male',F:'Female',T:'Transgender'}[f.gender]||f.gender),
+    'Care of':f.careof,'House':f.house,'Street':f.street,'Landmark':f.landmark,
+    'Location':f.location,'VTC':f.vtc,'Post office':f.postoffice,'Sub district':f.subdistrict,
+    'District':f.district,'State':f.state,'Pincode':f.pincode }, photo:photo };
 }
 
 function renderResult(res){
   $('fmtBadge').textContent = res.format;
-  const tbl = $('dataTable'); tbl.innerHTML = '';
-  for (const [k, v] of Object.entries(res.data)){
-    if (!v) continue;
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td class="k">${k}</td><td class="v">${escapeHtml(v)}</td>`;
+  const tbl=$('dataTable'); tbl.innerHTML='';
+  for(const [k,v] of Object.entries(res.data)){
+    if(!v) continue;
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td class="k">${k}</td><td class="v">${escapeHtml(v)}</td>`;
     tbl.appendChild(tr);
   }
-  const pw = $('photoWrap');
-  if (res.photo && res.photo.length > 4){
-    const isJpeg = res.photo[0] === 0xFF && res.photo[1] === 0xD8;
-    const blob = new Blob([res.photo], { type: isJpeg ? 'image/jpeg' : 'image/jp2' });
-    const url = URL.createObjectURL(blob);
-    $('photoDl').href = url;
-    $('photoDl').download = isJpeg ? 'aadhaar-photo.jpg' : 'aadhaar-photo.jp2';
-    if (isJpeg){ $('photo').src = url; $('photo').style.display = ''; $('photoDl').textContent = '⬇ Download photo'; }
-    else { $('photo').style.display = 'none'; $('photoDl').textContent = '⬇ Download photo (JPEG2000)'; }
+  const pw=$('photoWrap');
+  if(res.photo && res.photo.length>4){
+    const isJpeg=res.photo[0]===0xFF && res.photo[1]===0xD8;
+    const blob=new Blob([res.photo],{type:isJpeg?'image/jpeg':'image/jp2'});
+    const url=URL.createObjectURL(blob);
+    $('photoDl').href=url;
+    $('photoDl').download=isJpeg?'aadhaar-photo.jpg':'aadhaar-photo.jp2';
+    if(isJpeg){ $('photo').src=url; $('photo').style.display=''; $('photoDl').textContent='⬇ Download photo'; }
+    else { $('photo').style.display='none'; $('photoDl').textContent='⬇ Download photo (JPEG2000)'; }
     pw.classList.remove('hidden');
   } else pw.classList.add('hidden');
   $('result').classList.remove('hidden');
-  $('result').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  $('result').scrollIntoView({behavior:'smooth',block:'nearest'});
 }
 
-// returns true if a valid Aadhaar QR was decoded & rendered
+// returns true if a valid Aadhaar QR was decoded & rendered; throws for partial/non-Aadhaar
 function handleDecodedText(text){
-  const t = (text || '').trim();
+  const t=(text||'').trim();
   let res;
-  if (t.startsWith('<') || t.indexOf('PrintLetterBarcodeData') !== -1) res = decodeOldXml(t);
-  else if (/^\d+$/.test(t)) res = decodeSecureQr(t);           // may throw PARTIAL_READ
+  if(t.startsWith('<') || t.indexOf('PrintLetterBarcodeData')!==-1) res=decodeOldXml(t);
+  else if(/^\d+$/.test(t)) res=decodeSecureQr(t);        // may throw PARTIAL_READ
   else throw new Error('NOT_AADHAAR');
-  setStatus('✓ Decoded successfully.', 'ok');
+  setStatus('✓ Decoded successfully.','ok');
   renderResult(res);
   return true;
 }
 
-/* ---------------- QR reading engines ---------------- */
-// Native detector (Android Chrome/Edge) is dramatically better on dense QR.
-let barcodeDetector = null;
+/* ---------------- Decoder engines ---------------- */
+let barcodeDetector=null;
 async function getDetector(){
-  if (barcodeDetector !== null) return barcodeDetector || null;
+  if(barcodeDetector!==null) return barcodeDetector||null;
   try{
-    if ('BarcodeDetector' in window){
-      const fmts = await window.BarcodeDetector.getSupportedFormats();
-      if (fmts.includes('qr_code')){
-        barcodeDetector = new window.BarcodeDetector({ formats: ['qr_code'] });
-        return barcodeDetector;
-      }
+    if('BarcodeDetector' in window){
+      const fmts=await window.BarcodeDetector.getSupportedFormats();
+      if(fmts.includes('qr_code')){ barcodeDetector=new window.BarcodeDetector({formats:['qr_code']}); return barcodeDetector; }
     }
   }catch(e){}
-  barcodeDetector = false;
+  barcodeDetector=false; return null;
+}
+function jsqrDecode(imgData){
+  if(typeof jsQR!=='function') return null;
+  try{ const r=jsQR(imgData.data,imgData.width,imgData.height,{inversionAttempts:'attemptBoth'}); return r?r.data:null; }
+  catch(e){ return null; }
+}
+function zxingDecode(cnv){
+  if(!window.ZXing || !ZXing.MultiFormatReader) return null;
+  try{
+    const w=cnv.width,h=cnv.height;
+    const d=cnv.getContext('2d',{willReadFrequently:true}).getImageData(0,0,w,h).data;
+    const lum=new Uint8ClampedArray(w*h);
+    for(let i=0,j=0;i<d.length;i+=4,j++) lum[j]=(d[i]*77+d[i+1]*150+d[i+2]*29)>>8;
+    const hints=new Map();
+    hints.set(ZXing.DecodeHintType.TRY_HARDER,true);
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[ZXing.BarcodeFormat.QR_CODE]);
+    const reader=new ZXing.MultiFormatReader(); reader.setHints(hints);
+    const src=new ZXing.RGBLuminanceSource(lum,w,h);
+    const bmp=new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(src));
+    const res=reader.decode(bmp,hints);
+    return res ? (res.getText ? res.getText() : res.text) : null;
+  }catch(e){ return null; }   // NotFoundException etc.
+}
+// Try all engines on one canvas.
+async function decodeCanvas(cnv){
+  const det=await getDetector();
+  if(det){ try{ const codes=await det.detect(cnv); if(codes&&codes.length) return codes[0].rawValue; }catch(e){} }
+  const cx=cnv.getContext('2d',{willReadFrequently:true});
+  const j=jsqrDecode(cx.getImageData(0,0,cnv.width,cnv.height)); if(j) return j;
+  const z=zxingDecode(cnv); if(z) return z;
   return null;
 }
 
-// Decode a canvas/imagedata source with jsQR (fallback).
-function jsqrDecode(imageData){
-  if (typeof jsQR !== 'function') return null;
-  const r = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
-  return r ? r.data : null;
+/* ---------------- Image preprocessing (the low-quality lever) ---------------- */
+function extractGray(cnv){
+  const w=cnv.width,h=cnv.height;
+  const d=cnv.getContext('2d',{willReadFrequently:true}).getImageData(0,0,w,h).data;
+  const g=new Uint8ClampedArray(w*h);
+  for(let i=0,j=0;i<d.length;i+=4,j++) g[j]=(d[i]*77+d[i+1]*150+d[i+2]*29)>>8;
+  return {g,w,h};
+}
+function contrastStretch(g){
+  let mn=255,mx=0; for(let i=0;i<g.length;i++){const v=g[i]; if(v<mn)mn=v; if(v>mx)mx=v;}
+  if(mx<=mn) return g;
+  const s=255/(mx-mn), o=new Uint8ClampedArray(g.length);
+  for(let i=0;i<g.length;i++) o[i]=(g[i]-mn)*s;
+  return o;
+}
+function otsu(g){
+  const hist=new Array(256).fill(0); for(let i=0;i<g.length;i++)hist[g[i]]++;
+  const total=g.length; let sum=0; for(let i=0;i<256;i++)sum+=i*hist[i];
+  let sumB=0,wB=0,mxv=0,thr=127;
+  for(let t=0;t<256;t++){ wB+=hist[t]; if(!wB)continue; const wF=total-wB; if(!wF)break;
+    sumB+=t*hist[t]; const mB=sumB/wB,mF=(sum-sumB)/wF, bt=wB*wF*(mB-mF)*(mB-mF);
+    if(bt>mxv){mxv=bt;thr=t;} }
+  return thr;
+}
+function binarize(g,thr){ const o=new Uint8ClampedArray(g.length); for(let i=0;i<g.length;i++)o[i]=g[i]>thr?255:0; return o; }
+function adaptiveThreshold(g,w,h,block,C){
+  const S=new Float64Array((w+1)*(h+1));
+  for(let y=1;y<=h;y++){ let rs=0; for(let x=1;x<=w;x++){ rs+=g[(y-1)*w+(x-1)]; S[y*(w+1)+x]=S[(y-1)*(w+1)+x]+rs; } }
+  const r=block>>1, o=new Uint8ClampedArray(w*h);
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+    const x0=Math.max(0,x-r),y0=Math.max(0,y-r),x1=Math.min(w-1,x+r),y1=Math.min(h-1,y+r);
+    const area=(x1-x0+1)*(y1-y0+1);
+    const sum=S[(y1+1)*(w+1)+(x1+1)]-S[y0*(w+1)+(x1+1)]-S[(y1+1)*(w+1)+x0]+S[y0*(w+1)+x0];
+    o[y*w+x]=(g[y*w+x] < sum/area - C)?0:255;
+  }
+  return o;
+}
+function unsharp(g,w,h,amount){
+  const b=new Uint8ClampedArray(g.length);
+  for(let y=0;y<h;y++)for(let x=0;x<w;x++){
+    let s=0,c=0;
+    for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){ const ny=y+dy,nx=x+dx; if(ny<0||nx<0||ny>=h||nx>=w)continue; s+=g[ny*w+nx];c++; }
+    b[y*w+x]=s/c;
+  }
+  const o=new Uint8ClampedArray(g.length);
+  for(let i=0;i<g.length;i++) o[i]=Math.max(0,Math.min(255,g[i]+amount*(g[i]-b[i])));
+  return o;
+}
+function grayToCanvas(g,w,h){
+  const c=document.createElement('canvas'); c.width=w; c.height=h;
+  const cx=c.getContext('2d',{willReadFrequently:true}); const id=cx.createImageData(w,h);
+  for(let i=0,j=0;i<g.length;i++,j+=4){ const v=g[i]; id.data[j]=v; id.data[j+1]=v; id.data[j+2]=v; id.data[j+3]=255; }
+  cx.putImageData(id,0,0); return c;
+}
+function rotateCanvas(cnv,deg){
+  const w=cnv.width,h=cnv.height, c=document.createElement('canvas');
+  if(deg%180===0){ c.width=w; c.height=h; } else { c.width=h; c.height=w; }
+  const cx=c.getContext('2d'); cx.translate(c.width/2,c.height/2); cx.rotate(deg*Math.PI/180); cx.drawImage(cnv,-w/2,-h/2);
+  return c;
+}
+const clampOdd = n => { n=Math.max(3,n|0); return n%2?n:n+1; };
+
+/* ---------------- Brute-force enhance + decode (shared by camera & upload) ---------------- */
+const base=$('baseCanvas'), bctx=base.getContext('2d',{willReadFrequently:true});
+let bruteCancel=false;
+
+async function bruteForceDecode(src, W, H){
+  bruteCancel=false;
+  const minSide=Math.min(W,H);
+  // Upscale small scans so modules are resolvable; also try a downscale (helps huge blurry photos).
+  const targets=[1300,1900,850].filter((t,i,a)=>a.indexOf(t)===i);
+  const est=targets.length*5+3; let tried=0;
+  showBar(true); setBar(0);
+
+  for(let ti=0; ti<targets.length; ti++){
+    if(bruteCancel) break;
+    const target=targets[ti];
+    let scale=target/minSide; const maxSide=3000;
+    if(Math.max(W,H)*scale>maxSide) scale=maxSide/Math.max(W,H);
+    const w=Math.max(1,Math.round(W*scale)), h=Math.max(1,Math.round(H*scale));
+    base.width=w; base.height=h;
+    bctx.imageSmoothingEnabled=true; bctx.imageSmoothingQuality='high';
+    bctx.drawImage(src,0,0,w,h);
+
+    const {g}=extractGray(base);
+    const cs=contrastStretch(g);
+    const t1=otsu(cs);
+    const sharp=unsharp(cs,w,h,1.4); const t2=otsu(sharp);
+
+    const variants=[
+      base,                                                                   // hi-quality color resample
+      grayToCanvas(cs,w,h),                                                    // contrast-stretched gray
+      grayToCanvas(binarize(cs,t1),w,h),                                       // Otsu global binarization
+      grayToCanvas(adaptiveThreshold(cs,w,h,clampOdd(Math.min(w,h)/10),7),w,h),// adaptive local threshold
+      grayToCanvas(binarize(sharp,t2),w,h)                                     // sharpen + Otsu (beats blur)
+    ];
+    for(const cv of variants){
+      if(bruteCancel) break;
+      tried++; setBar(tried/est);
+      const text=await decodeCanvas(cv);
+      if(text){ try{ if(handleDecodedText(text)){ showBar(false); return true; } }catch(e){/* try next variant */} }
+      await yieldUI();
+    }
+
+    // last resort on the first (default) scale: rotations for sideways/upside-down scans
+    if(ti===0){
+      const ob=grayToCanvas(binarize(cs,t1),w,h);
+      for(const deg of [90,180,270]){
+        if(bruteCancel) break;
+        tried++; setBar(tried/est);
+        const text=await decodeCanvas(rotateCanvas(ob,deg));
+        if(text){ try{ if(handleDecodedText(text)){ showBar(false); return true; } }catch(e){} }
+        await yieldUI();
+      }
+    }
+  }
+  showBar(false);
+  return false;
 }
 
 /* ---------------- Camera pipeline ---------------- */
-let stream = null, rafId = 0, scanning = false;
-let facing = 'environment', torchOn = false, track = null;
-const video = $('video'), canvas = $('canvas'), ctx = canvas.getContext('2d', { willReadFrequently: true });
+let stream=null, rafId=0, scanning=false;
+let facing='environment', torchOn=false, track=null;
+let scanStartAt=0, lastBruteAt=0, brutingNow=false;
+const video=$('video'), canvas=$('canvas'), ctx=canvas.getContext('2d',{willReadFrequently:true});
+const grab=$('grabCanvas');
 
 function isSecure(){ return window.isSecureContext || ['localhost','127.0.0.1'].includes(location.hostname); }
 
 async function startCamera(){
   $('result').classList.add('hidden');
-  if (!isSecure()){
-    setStatus('🔒 The camera needs a secure page. Open this app over <b>https://</b> ' +
-              '(or localhost). You can still <b>upload a photo</b> below.', 'err');
+  if(!isSecure()){
+    setStatus('🔒 The camera needs a secure page. Open this app over <b>https://</b> (or localhost). You can still <b>upload a photo</b> below.','err');
     return;
   }
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
-    setStatus('This browser can’t access the camera. Please <b>upload a photo</b> instead.', 'err');
-    return;
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    setStatus('This browser can’t access the camera. Please <b>upload a photo</b> instead.','err'); return;
   }
-  setStatus('Starting camera…', 'info');
-  $('startBtn').disabled = true;
-  await getDetector(); // warm up
+  setStatus('Starting camera…','info');
+  $('startBtn').disabled=true;
+  await getDetector();
 
   try{
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: { facingMode: { ideal: facing }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+    stream=await navigator.mediaDevices.getUserMedia({
+      audio:false,
+      video:{ facingMode:{ideal:facing}, width:{ideal:2560}, height:{ideal:1440}, frameRate:{ideal:30} }
     });
-  }catch(err){
-    $('startBtn').disabled = false;
-    return setStatus(cameraErrorMessage(err), 'err');
-  }
+  }catch(err){ $('startBtn').disabled=false; return setStatus(cameraErrorMessage(err),'err'); }
 
-  video.srcObject = stream;
-  try { await video.play(); } catch(e){ /* autoplay is enabled; ignore */ }
-  track = stream.getVideoTracks()[0];
+  video.srcObject=stream;
+  try{ await video.play(); }catch(e){}
+  track=stream.getVideoTracks()[0];
+  try{ await track.applyConstraints({ advanced:[{focusMode:'continuous'}] }); }catch(e){}
 
   $('placeholder').classList.add('hidden');
   $('reticle').classList.add('on');
-  $('startBtn').classList.add('hidden');
-  $('startBtn').disabled = false;
+  $('startBtn').classList.add('hidden'); $('startBtn').disabled=false;
+  $('captureBtn').classList.remove('hidden');
   $('liveRow').classList.remove('hidden');
   setupTorchAndFlip();
-  setStatus(barcodeDetector ? 'Scanning… fill the frame with the QR.'
-                            : 'Scanning… fill the frame and hold very steady.', 'info');
+  setStatus('Scanning… fill the frame with the QR and hold steady.','info');
 
-  scanning = true;
+  scanning=true; scanStartAt=performance.now(); lastBruteAt=0; brutingNow=false;
   scanLoop();
 }
 
 function cameraErrorMessage(err){
-  const n = err && err.name;
-  if (n === 'NotAllowedError' || n === 'SecurityError')
-    return '🚫 Camera permission was blocked. Allow camera access in your browser settings, then tap Start again — or <b>upload a photo</b>.';
-  if (n === 'NotFoundError' || n === 'OverconstrainedError')
-    return 'No suitable camera was found. Try <b>Flip</b>, or <b>upload a photo</b> instead.';
-  if (n === 'NotReadableError')
-    return 'The camera is in use by another app. Close it and try again, or <b>upload a photo</b>.';
-  return 'Camera error: ' + escapeHtml((err && err.message) || String(err)) + '. Try <b>uploading a photo</b>.';
+  const n=err&&err.name;
+  if(n==='NotAllowedError'||n==='SecurityError') return '🚫 Camera permission was blocked. Allow camera access in your browser settings, then tap Start again — or <b>upload a photo</b>.';
+  if(n==='NotFoundError'||n==='OverconstrainedError') return 'No suitable camera was found. Try <b>Flip</b>, or <b>upload a photo</b> instead.';
+  if(n==='NotReadableError') return 'The camera is in use by another app. Close it and try again, or <b>upload a photo</b>.';
+  return 'Camera error: '+escapeHtml((err&&err.message)||String(err))+'. Try <b>uploading a photo</b>.';
 }
-
 function setupTorchAndFlip(){
   $('flipBtn').classList.remove('hidden');
-  try{
-    const caps = track.getCapabilities ? track.getCapabilities() : {};
-    if (caps && caps.torch) $('torchBtn').classList.remove('hidden');
-    else $('torchBtn').classList.add('hidden');
+  try{ const caps=track.getCapabilities?track.getCapabilities():{};
+    if(caps&&caps.torch) $('torchBtn').classList.remove('hidden'); else $('torchBtn').classList.add('hidden');
   }catch(e){ $('torchBtn').classList.add('hidden'); }
 }
 
-let lastBad = '', partialCount = 0;
-async function scanLoop(){
-  if (!scanning) return;
-  if (video.readyState >= 2 && video.videoWidth){
-    let text = null;
-    try{
-      if (barcodeDetector){
-        const codes = await barcodeDetector.detect(video);
-        if (codes && codes.length) text = codes[0].rawValue;
-      } else {
-        canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        text = jsqrDecode(ctx.getImageData(0, 0, canvas.width, canvas.height));
-      }
-    }catch(e){ /* transient; keep scanning */ }
+function grabFrame(){
+  const w=video.videoWidth, h=video.videoHeight;
+  grab.width=w; grab.height=h;
+  grab.getContext('2d',{willReadFrequently:true}).drawImage(video,0,0,w,h);
+  return {canvas:grab,w,h};
+}
 
-    if (text) {
-      try {
-        if (handleDecodedText(text)) { stopCamera(); return; }
-      } catch(e){
-        // Aadhaar QR seen but decoded partially — guide, keep scanning
-        if (e.message === 'PARTIAL_READ'){
-          if (text !== lastBad){ partialCount++; lastBad = text; }
-          setStatus('Reading… got a partial read (attempt ' + partialCount +
-            '). Hold steady & add light — or <b>upload a photo</b> for a guaranteed read.', 'warn');
-        } else if (e.message === 'NOT_AADHAAR'){
-          setStatus('That’s a QR, but not an Aadhaar code.', 'warn');
-        }
+async function scanLoop(){
+  if(!scanning) return;
+  if(brutingNow){ rafId=requestAnimationFrame(scanLoop); return; }
+
+  if(video.readyState>=2 && video.videoWidth){
+    let text=null;
+    try{
+      if(barcodeDetector){
+        const codes=await barcodeDetector.detect(video);
+        if(codes&&codes.length) text=codes[0].rawValue;
+      } else {
+        // no native detector (iOS): quick jsQR pass on a downscaled frame
+        const s=Math.min(1,1000/Math.max(video.videoWidth,video.videoHeight));
+        canvas.width=Math.round(video.videoWidth*s); canvas.height=Math.round(video.videoHeight*s);
+        ctx.drawImage(video,0,0,canvas.width,canvas.height);
+        text=jsqrDecode(ctx.getImageData(0,0,canvas.width,canvas.height));
       }
+    }catch(e){}
+
+    if(text){
+      try{ if(handleDecodedText(text)){ stopCamera(); return; } }
+      catch(e){ /* seen but not clean — the enhancer below will handle it */ }
+    }
+
+    // Auto-enhance: after a short delay with no clean read, brute-force real frames periodically.
+    const now=performance.now();
+    if(now-scanStartAt>1500 && now-lastBruteAt>2500){
+      lastBruteAt=now; autoBrute();
     }
   }
-  rafId = requestAnimationFrame(scanLoop);
+  rafId=requestAnimationFrame(scanLoop);
+}
+
+async function autoBrute(){
+  if(brutingNow || !scanning) return;
+  brutingNow=true;
+  setStatus('Enhancing the image to read a low-quality QR…','info');
+  const {canvas:fc,w,h}=grabFrame();
+  const ok=await bruteForceDecode(fc,w,h);
+  brutingNow=false;
+  if(ok){ stopCamera(); }
+  else if(scanning){ setStatus('Still working… hold steady, fill the frame, add light. Or tap <b>Capture &amp; enhance</b> / upload a photo.','info'); }
+}
+
+async function manualCapture(){
+  if(!scanning) return;
+  if(brutingNow){ return; }
+  brutingNow=true;
+  setStatus('Capturing &amp; enhancing… hold the card still.','info');
+  const {canvas:fc,w,h}=grabFrame();
+  const ok=await bruteForceDecode(fc,w,h);
+  brutingNow=false;
+  if(ok){ stopCamera(); }
+  else if(scanning){ setStatus('Couldn’t read it from that frame. Move closer so the QR fills the frame, tap the QR to focus, add light, then try again — or upload a photo.','warn'); }
 }
 
 function stopCamera(){
-  scanning = false;
-  if (rafId) cancelAnimationFrame(rafId), rafId = 0;
-  if (stream){ stream.getTracks().forEach(t => t.stop()); stream = null; }
-  track = null; torchOn = false;
-  video.srcObject = null;
+  scanning=false; bruteCancel=true;
+  if(rafId){ cancelAnimationFrame(rafId); rafId=0; }
+  if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
+  track=null; torchOn=false; brutingNow=false;
+  video.srcObject=null;
   $('reticle').classList.remove('on');
   $('placeholder').classList.remove('hidden');
   $('startBtn').classList.remove('hidden');
+  $('captureBtn').classList.add('hidden');
   $('liveRow').classList.add('hidden');
-  $('torchBtn').classList.add('hidden');
-  $('flipBtn').classList.add('hidden');
-  $('torchBtn').textContent = '🔦 Torch';
+  $('torchBtn').classList.add('hidden'); $('flipBtn').classList.add('hidden');
+  $('torchBtn').textContent='🔦 Torch';
+  showBar(false);
 }
 
 async function toggleTorch(){
-  if (!track) return;
-  try{
-    torchOn = !torchOn;
-    await track.applyConstraints({ advanced: [{ torch: torchOn }] });
-    $('torchBtn').textContent = torchOn ? '🔦 Off' : '🔦 Torch';
-  }catch(e){ torchOn = false; setStatus('Torch isn’t supported on this camera.', 'warn'); }
+  if(!track) return;
+  try{ torchOn=!torchOn; await track.applyConstraints({advanced:[{torch:torchOn}]}); $('torchBtn').textContent=torchOn?'🔦 Off':'🔦 Torch'; }
+  catch(e){ torchOn=false; setStatus('Torch isn’t supported on this camera.','warn'); }
 }
+async function flipCamera(){ facing=(facing==='environment')?'user':'environment'; stopCamera(); await startCamera(); }
 
-async function flipCamera(){
-  facing = (facing === 'environment') ? 'user' : 'environment';
-  stopCamera();
-  await startCamera();
-}
-
-/* ---------------- Upload a photo (most reliable for dense QR) ---------------- */
+/* ---------------- Upload a photo ---------------- */
 async function scanFromFile(file){
   stopCamera();
   $('result').classList.add('hidden');
-  setStatus('Reading image…', 'info');
+  setStatus('Reading &amp; enhancing image…','info');
   try{
-    const text = await decodeImageFile(file);
-    if (!text){
-      setStatus('No QR found in that image. Use a <b>sharp, well-lit, close-up</b> photo where the QR fills most of the frame and isn’t blurry.', 'err');
-      return;
-    }
-    handleDecodedText(text);
+    const bmp=await loadBitmap(file);
+    const W=bmp.width||bmp.naturalWidth, H=bmp.height||bmp.naturalHeight;
+    const ok=await bruteForceDecode(bmp,W,H);
+    if(!ok) setStatus('No readable QR in that image. Use a <b>sharp, well-lit, close-up</b> photo where the QR fills most of the frame. Avoid glare and motion blur.','err');
   }catch(e){
-    if (e.message === 'PARTIAL_READ')
-      setStatus('The QR was found but read only partially — the photo is likely blurry or low-resolution. Retake it sharp and close-up.', 'err');
-    else if (e.message === 'NOT_AADHAAR')
-      setStatus('A QR was found, but it isn’t an Aadhaar code.', 'err');
-    else
-      setStatus('Could not read that image: ' + escapeHtml(e.message), 'err');
+    setStatus('Could not read that image: '+escapeHtml(e.message),'err');
   }
 }
-
-// Try native detector at full resolution first, then jsQR at a few scales.
-async function decodeImageFile(file){
-  const bitmap = await loadBitmap(file);
-  const det = await getDetector();
-
-  if (det){
-    try{
-      const codes = await det.detect(bitmap);
-      if (codes && codes.length) return codes[0].rawValue;
-    }catch(e){ /* fall through to jsQR */ }
-  }
-
-  // jsQR fallback — try full res, then a couple of downscales (helps very large photos).
-  const maxDim = Math.max(bitmap.width, bitmap.height);
-  const scales = [1, 1600 / maxDim, 1000 / maxDim].filter(s => s > 0 && s <= 1);
-  if (scales[0] !== 1) scales.unshift(1);
-  for (const s of scales){
-    const w = Math.round(bitmap.width * s), h = Math.round(bitmap.height * s);
-    if (w < 40 || h < 40) continue;
-    canvas.width = w; canvas.height = h;
-    ctx.drawImage(bitmap, 0, 0, w, h);
-    const text = jsqrDecode(ctx.getImageData(0, 0, w, h));
-    if (text) return text;
-  }
-  return null;
-}
-
 function loadBitmap(file){
-  if ('createImageBitmap' in window)
-    return createImageBitmap(file).catch(() => loadViaImgTag(file));
+  if('createImageBitmap' in window) return createImageBitmap(file).catch(()=>loadViaImgTag(file));
   return loadViaImgTag(file);
 }
 function loadViaImgTag(file){
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
-    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Unsupported image')); };
-    img.src = url;
+  return new Promise((resolve,reject)=>{
+    const url=URL.createObjectURL(file); const img=new Image();
+    img.onload=()=>{ URL.revokeObjectURL(url); resolve(img); };
+    img.onerror=()=>{ URL.revokeObjectURL(url); reject(new Error('Unsupported image')); };
+    img.src=url;
   });
 }
 
 /* ---------------- Wire up ---------------- */
-$('startBtn').onclick   = startCamera;
-$('stopBtn').onclick     = () => { stopCamera(); clearStatus(); };
-$('torchBtn').onclick    = toggleTorch;
-$('flipBtn').onclick      = flipCamera;
-$('photoScanBtn').onclick = () => $('fileInput').click();
-$('fileInput').onchange   = e => { const f = e.target.files[0]; if (f) scanFromFile(f); e.target.value = ''; };
-$('againBtn').onclick      = () => { $('result').classList.add('hidden'); clearStatus(); };
+$('startBtn').onclick=startCamera;
+$('captureBtn').onclick=manualCapture;
+$('stopBtn').onclick=()=>{ stopCamera(); clearStatus(); };
+$('torchBtn').onclick=toggleTorch;
+$('flipBtn').onclick=flipCamera;
+$('photoScanBtn').onclick=()=>$('fileInput').click();
+$('fileInput').onchange=e=>{ const f=e.target.files[0]; if(f) scanFromFile(f); e.target.value=''; };
+$('againBtn').onclick=()=>{ $('result').classList.add('hidden'); clearStatus(); };
 
-// stop the camera if the tab is hidden (saves battery / releases the device)
-document.addEventListener('visibilitychange', () => { if (document.hidden && scanning) stopCamera(); });
-window.addEventListener('pagehide', () => { if (stream) stopCamera(); });
+document.addEventListener('visibilitychange',()=>{ if(document.hidden && scanning) stopCamera(); });
+window.addEventListener('pagehide',()=>{ if(stream) stopCamera(); });
 </script>
 </body>
 </html>
