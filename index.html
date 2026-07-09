@@ -2,69 +2,149 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover, user-scalable=no" />
 <meta name="theme-color" content="#0b3d91" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <title>Aadhaar QR Scanner</title>
 <link rel="manifest" href="manifest.json" />
-<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<!-- pako for gunzip of the Secure-QR payload -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+<!-- jsQR: pure-JS fallback for browsers without a native BarcodeDetector (iOS Safari) -->
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 <style>
-  :root { --brand:#0b3d91; --brand2:#1565c0; --bg:#f4f6fb; --card:#fff; --ok:#1b8a3a; --err:#c0392b; --warn:#b8860b; }
-  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-  body { margin:0; font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif; background:var(--bg); color:#1a1a1a; }
-  header { background:linear-gradient(135deg,var(--brand),var(--brand2)); color:#fff; padding:16px; text-align:center; }
-  header h1 { margin:0; font-size:19px; font-weight:600; }
-  header p { margin:4px 0 0; font-size:12px; opacity:.85; }
-  main { padding:14px; max-width:520px; margin:0 auto; }
-  .card { background:var(--card); border-radius:14px; padding:16px; box-shadow:0 2px 10px rgba(0,0,0,.06); margin-bottom:14px; }
-  #reader { width:100%; border-radius:12px; overflow:hidden; }
-  button { width:100%; border:0; border-radius:12px; padding:14px; font-size:16px; font-weight:600; color:#fff; background:var(--brand2); margin-top:10px; }
-  button.secondary { background:#607d8b; }
-  button.ghost { background:#eef2ff; color:var(--brand); }
-  button:active { opacity:.85; }
-  button:disabled { opacity:.4; }
-  .row { display:flex; gap:10px; }
-  .row button { margin-top:0; }
-  .hint { font-size:12px; color:#666; text-align:center; margin-top:8px; line-height:1.5; }
-  .status { font-size:13px; padding:9px 12px; border-radius:8px; margin-top:10px; display:none; line-height:1.45; }
-  .status.show { display:block; }
-  .status.ok { background:#e5f6ea; color:var(--ok); }
-  .status.err { background:#fdeceb; color:var(--err); }
-  .status.warn { background:#fff8e1; color:var(--warn); }
-  table { width:100%; border-collapse:collapse; }
-  td { padding:9px 6px; border-bottom:1px solid #eee; font-size:14px; vertical-align:top; }
-  td.k { color:#666; width:38%; font-weight:500; }
-  td.v { color:#111; font-weight:600; word-break:break-word; }
-  .photo { text-align:center; margin-bottom:12px; }
-  .photo img { width:120px; height:150px; object-fit:cover; border-radius:10px; border:2px solid #e0e0e0; }
-  .badge { display:inline-block; font-size:11px; padding:3px 9px; border-radius:20px; background:#eef2ff; color:var(--brand); margin-bottom:10px; }
-  .hidden { display:none; }
-  a.dl { display:inline-block; font-size:12px; margin-top:6px; color:var(--brand2); }
-  footer { text-align:center; font-size:11px; color:#999; padding:16px; }
+  :root{
+    --brand:#0b3d91; --brand2:#1565c0; --bg:#eef1f8; --card:#fff;
+    --ink:#1a1a2e; --muted:#667085; --line:#e6e8f0;
+    --ok:#1b8a3a; --err:#c0392b; --warn:#b8860b;
+    --safe-b: env(safe-area-inset-bottom, 0px);
+  }
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body{ height:100%; }
+  body{
+    margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    background:var(--bg); color:var(--ink); -webkit-font-smoothing:antialiased;
+  }
+  header{
+    background:linear-gradient(135deg,var(--brand),var(--brand2)); color:#fff;
+    padding:calc(14px + env(safe-area-inset-top,0px)) 16px 14px; text-align:center;
+  }
+  header h1{ margin:0; font-size:19px; font-weight:700; letter-spacing:.2px; }
+  header p{ margin:4px 0 0; font-size:12px; opacity:.9; }
+  main{ padding:14px; max-width:520px; margin:0 auto; padding-bottom:calc(20px + var(--safe-b)); }
+  .card{
+    background:var(--card); border-radius:16px; padding:16px;
+    box-shadow:0 4px 18px rgba(16,24,64,.07); margin-bottom:14px;
+  }
+
+  /* ---- camera viewport ---- */
+  .stage{
+    position:relative; width:100%; aspect-ratio:1/1; background:#0c1222;
+    border-radius:14px; overflow:hidden; display:flex; align-items:center; justify-content:center;
+  }
+  .stage video{ width:100%; height:100%; object-fit:cover; display:block; }
+  .stage .placeholder{
+    position:absolute; inset:0; display:flex; flex-direction:column; gap:8px;
+    align-items:center; justify-content:center; color:#9fb0d0; font-size:13px; text-align:center; padding:24px;
+  }
+  .stage .placeholder svg{ width:46px; height:46px; opacity:.7; }
+  /* scan reticle */
+  .reticle{ position:absolute; inset:0; pointer-events:none; display:none; }
+  .reticle.on{ display:block; }
+  .reticle .frame{
+    position:absolute; inset:12%; border-radius:14px;
+    box-shadow:0 0 0 3000px rgba(6,10,26,.35);
+  }
+  .reticle .corner{ position:absolute; width:26px; height:26px; border:3px solid #fff; }
+  .reticle .tl{ top:11%; left:11%; border-right:0; border-bottom:0; border-radius:8px 0 0 0; }
+  .reticle .tr{ top:11%; right:11%; border-left:0; border-bottom:0; border-radius:0 8px 0 0; }
+  .reticle .bl{ bottom:11%; left:11%; border-right:0; border-top:0; border-radius:0 0 0 8px; }
+  .reticle .br{ bottom:11%; right:11%; border-left:0; border-top:0; border-radius:0 0 8px 0; }
+  .reticle .laser{
+    position:absolute; left:13%; right:13%; height:2px; top:14%;
+    background:linear-gradient(90deg,transparent,#4fc3f7,transparent);
+    animation:scan 2.2s ease-in-out infinite;
+  }
+  @keyframes scan{ 0%{top:14%}50%{top:84%}100%{top:14%} }
+  @media (prefers-reduced-motion: reduce){ .reticle .laser{ animation:none; } }
+
+  /* ---- buttons ---- */
+  .btns{ display:flex; flex-direction:column; gap:10px; margin-top:12px; }
+  .row{ display:flex; gap:10px; }
+  .row>button{ flex:1; }
+  button{
+    width:100%; border:0; border-radius:12px; padding:14px; font-size:15px; font-weight:600;
+    color:#fff; background:var(--brand2); cursor:pointer; transition:opacity .15s, transform .05s;
+  }
+  button:active{ transform:scale(.985); opacity:.9; }
+  button:disabled{ opacity:.45; cursor:not-allowed; }
+  button.secondary{ background:#5b6b7d; }
+  button.ghost{ background:#eef2ff; color:var(--brand); }
+  button.tiny{ padding:11px; font-size:14px; }
+
+  .hint{ font-size:12px; color:var(--muted); text-align:center; margin-top:10px; line-height:1.5; }
+  .status{ font-size:13px; padding:10px 12px; border-radius:10px; margin-top:12px; display:none; line-height:1.45; }
+  .status.show{ display:block; }
+  .status.ok{ background:#e5f6ea; color:var(--ok); }
+  .status.err{ background:#fdeceb; color:var(--err); }
+  .status.warn{ background:#fff8e1; color:var(--warn); }
+  .status.info{ background:#e8f0fe; color:var(--brand); }
+
+  table{ width:100%; border-collapse:collapse; }
+  td{ padding:10px 6px; border-bottom:1px solid var(--line); font-size:14px; vertical-align:top; }
+  tr:last-child td{ border-bottom:0; }
+  td.k{ color:var(--muted); width:40%; font-weight:500; }
+  td.v{ color:var(--ink); font-weight:600; word-break:break-word; }
+  .photo{ text-align:center; margin-bottom:14px; }
+  .photo img{ width:118px; height:150px; object-fit:cover; border-radius:12px; border:2px solid var(--line); }
+  .badge{ display:inline-block; font-size:11px; padding:4px 10px; border-radius:20px; background:#eef2ff; color:var(--brand); margin-bottom:12px; font-weight:600; }
+  .hidden{ display:none !important; }
+  a.dl{ display:inline-block; font-size:12px; margin-top:6px; color:var(--brand2); font-weight:600; }
+  footer{ text-align:center; font-size:11px; color:#98a2b3; padding:16px; line-height:1.5; }
   input[type=file]{ display:none; }
+  canvas{ display:none; }
 </style>
 </head>
 <body>
 <header>
   <h1>Aadhaar QR Scanner</h1>
-  <p>Scan the Secure QR on an Aadhaar card / e-Aadhaar</p>
+  <p>Reads the Secure QR on an Aadhaar card / e-Aadhaar — fully offline</p>
 </header>
 
 <main>
-  <div class="card">
-    <div id="reader"></div>
-    <div class="row">
-      <button id="startBtn">Start camera</button>
-      <button id="stopBtn" class="secondary hidden">Stop</button>
+  <div class="card" id="scanCard">
+    <div class="stage">
+      <video id="video" playsinline muted autoplay></video>
+      <div class="placeholder" id="placeholder">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/>
+          <rect x="7" y="7" width="10" height="10" rx="1"/>
+        </svg>
+        <span>Point the camera at the Aadhaar Secure QR,<br>or upload a photo of it.</span>
+      </div>
+      <div class="reticle" id="reticle">
+        <div class="frame"></div>
+        <div class="corner tl"></div><div class="corner tr"></div>
+        <div class="corner bl"></div><div class="corner br"></div>
+        <div class="laser"></div>
+      </div>
     </div>
-    <div class="row">
-      <button id="torchBtn" class="ghost hidden">🔦 Torch</button>
+
+    <div class="btns">
+      <button id="startBtn">📷 Start camera</button>
+      <div class="row hidden" id="liveRow">
+        <button id="torchBtn" class="ghost tiny hidden">🔦 Torch</button>
+        <button id="flipBtn" class="ghost tiny hidden">🔄 Flip</button>
+        <button id="stopBtn" class="secondary tiny">■ Stop</button>
+      </div>
+      <button id="photoScanBtn" class="ghost">🖼️ Upload a photo of the QR</button>
+      <input type="file" id="fileInput" accept="image/*" />
     </div>
-    <button id="photoScanBtn" class="ghost">📷 Scan from a photo (most reliable)</button>
-    <input type="file" id="fileInput" accept="image/*" />
+
     <div class="hint">
-      The Secure QR is large &amp; dense. If live scanning keeps failing, tap
-      <b>Scan from a photo</b> and select a clear picture of the QR (or the e-Aadhaar PDF page).
+      The Secure QR is large &amp; dense. Fill the frame with it and hold steady.
+      If the camera struggles, <b>upload a sharp close-up photo</b> — it's the most reliable.
     </div>
     <div id="status" class="status"></div>
   </div>
@@ -73,28 +153,37 @@
     <span class="badge" id="fmtBadge"></span>
     <div class="photo hidden" id="photoWrap">
       <img id="photo" alt="photo" />
-      <div><a class="dl" id="photoDl" download="aadhaar-photo">Download photo</a></div>
+      <div><a class="dl" id="photoDl" download="aadhaar-photo">⬇ Download photo</a></div>
     </div>
     <table id="dataTable"></table>
-    <button id="againBtn">Scan another</button>
+    <button id="againBtn" style="margin-top:14px;">Scan another</button>
   </div>
 </main>
 
-<footer>Runs locally in your browser. Data is not uploaded anywhere. Use only with the cardholder's consent.</footer>
+<footer>
+  Runs locally in your browser — nothing is uploaded anywhere.<br>
+  Use only with the cardholder's consent.
+</footer>
+
+<canvas id="canvas"></canvas>
 
 <script>
+"use strict";
 const $ = id => document.getElementById(id);
-let html5Qr = null, torchOn = false, failCount = 0, lastBad = '';
 
-function setStatus(msg, type) {
+/* ---------------- UI helpers ---------------- */
+function setStatus(msg, type){
   const el = $('status');
   el.innerHTML = msg;
-  el.className = 'status show ' + (type || '');
+  el.className = 'status show ' + (type || 'info');
+}
+function clearStatus(){ $('status').className = 'status'; }
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
-/* ---------- Aadhaar decoders ---------- */
-
-function decodeOldXml(text) {
+/* ---------------- Aadhaar decoders ---------------- */
+function decodeOldXml(text){
   const attr = n => { const m = text.match(new RegExp(n + '="([^"]*)"')); return m ? m[1] : ''; };
   return {
     format: 'Old XML QR',
@@ -111,21 +200,19 @@ function decodeOldXml(text) {
   };
 }
 
-function decodeSecureQr(bigIntStr) {
+function decodeSecureQr(bigIntStr){
   let n;
-  try { n = BigInt(bigIntStr); } catch (e) { throw new Error('QR value is not numeric'); }
+  try { n = BigInt(bigIntStr); } catch(e){ throw new Error('QR value is not numeric'); }
   let hex = n.toString(16);
   if (hex.length % 2) hex = '0' + hex;
   const raw = new Uint8Array(hex.length / 2);
   for (let i = 0; i < raw.length; i++) raw[i] = parseInt(hex.substr(i * 2, 2), 16);
 
-  // gzip magic check — a partial/misread QR usually fails right here
-  if (!(raw[0] === 0x1f && raw[1] === 0x8b)) {
-    throw new Error('PARTIAL_READ');
-  }
+  // gzip magic — a partial/misread of the dense QR usually fails right here
+  if (!(raw[0] === 0x1f && raw[1] === 0x8b)) throw new Error('PARTIAL_READ');
   let bytes;
   try { bytes = pako.ungzip(raw); }
-  catch (e) { throw new Error('PARTIAL_READ'); }
+  catch(e){ throw new Error('PARTIAL_READ'); }
 
   const delim = [-1];
   for (let i = 0; i < bytes.length; i++) if (bytes[i] === 255) delim.push(i);
@@ -140,14 +227,14 @@ function decodeSecureQr(bigIntStr) {
     f[fields[i]] = dec.decode(bytes.slice(delim[i] + 1, delim[i + 1])).trim();
 
   const ind = f.emailMobileIndicator;
-  let hashBytes = (ind === '1' || ind === '2') ? 32 : (ind === '3' ? 64 : 0);
+  const hashBytes = (ind === '1' || ind === '2') ? 32 : (ind === '3' ? 64 : 0);
   const photoStart = delim[fields.length] + 1;
   const photoEnd = bytes.length - 256 - hashBytes;
-  let photo = (photoEnd > photoStart) ? bytes.slice(photoStart, photoEnd) : null;
+  const photo = (photoEnd > photoStart) ? bytes.slice(photoStart, photoEnd) : null;
 
   const ref = f.referenceId || '';
   return {
-    format: 'Secure QR (signed by UIDAI)',
+    format: 'Secure QR (UIDAI signed)',
     data: {
       'Aadhaar (last 4)': ref.slice(0, 4), 'Name': f.name, 'Date of birth': f.dob,
       'Gender': ({M:'Male',F:'Female',T:'Transgender'}[f.gender] || f.gender),
@@ -159,125 +246,276 @@ function decodeSecureQr(bigIntStr) {
   };
 }
 
-function renderResult(res) {
+function renderResult(res){
   $('fmtBadge').textContent = res.format;
   const tbl = $('dataTable'); tbl.innerHTML = '';
-  for (const [k, v] of Object.entries(res.data)) {
+  for (const [k, v] of Object.entries(res.data)){
     if (!v) continue;
     const tr = document.createElement('tr');
     tr.innerHTML = `<td class="k">${k}</td><td class="v">${escapeHtml(v)}</td>`;
     tbl.appendChild(tr);
   }
   const pw = $('photoWrap');
-  if (res.photo && res.photo.length > 4) {
+  if (res.photo && res.photo.length > 4){
     const isJpeg = res.photo[0] === 0xFF && res.photo[1] === 0xD8;
     const blob = new Blob([res.photo], { type: isJpeg ? 'image/jpeg' : 'image/jp2' });
     const url = URL.createObjectURL(blob);
     $('photoDl').href = url;
     $('photoDl').download = isJpeg ? 'aadhaar-photo.jpg' : 'aadhaar-photo.jp2';
-    if (isJpeg) { $('photo').src = url; $('photo').style.display = ''; }
-    else { $('photo').style.display = 'none'; }
+    if (isJpeg){ $('photo').src = url; $('photo').style.display = ''; $('photoDl').textContent = '⬇ Download photo'; }
+    else { $('photo').style.display = 'none'; $('photoDl').textContent = '⬇ Download photo (JPEG2000)'; }
     pw.classList.remove('hidden');
   } else pw.classList.add('hidden');
   $('result').classList.remove('hidden');
-  $('result').scrollIntoView({ behavior: 'smooth' });
+  $('result').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-
-// returns true if handled successfully
-function handleScan(text) {
+// returns true if a valid Aadhaar QR was decoded & rendered
+function handleDecodedText(text){
   const t = (text || '').trim();
-  try {
-    let res;
-    if (t.startsWith('<') || t.indexOf('PrintLetterBarcodeData') !== -1) res = decodeOldXml(t);
-    else if (/^\d+$/.test(t)) res = decodeSecureQr(t);
-    else { setStatus('That QR is not an Aadhaar code.', 'err'); return false; }
-    failCount = 0;
-    setStatus('Decoded successfully.', 'ok');
-    renderResult(res);
-    return true;
-  } catch (e) {
-    if (e.message === 'PARTIAL_READ') {
-      // dense QR misread — keep trying, guide the user
-      if (t !== lastBad) { failCount++; lastBad = t; }
-      setStatus('Reading… QR is dense and got a partial read (attempt ' + failCount +
-        '). Hold steady, add light, or use <b>Scan from a photo</b> for a guaranteed read.', 'warn');
-    } else {
-      setStatus('Could not decode: ' + escapeHtml(e.message), 'err');
+  let res;
+  if (t.startsWith('<') || t.indexOf('PrintLetterBarcodeData') !== -1) res = decodeOldXml(t);
+  else if (/^\d+$/.test(t)) res = decodeSecureQr(t);           // may throw PARTIAL_READ
+  else throw new Error('NOT_AADHAAR');
+  setStatus('✓ Decoded successfully.', 'ok');
+  renderResult(res);
+  return true;
+}
+
+/* ---------------- QR reading engines ---------------- */
+// Native detector (Android Chrome/Edge) is dramatically better on dense QR.
+let barcodeDetector = null;
+async function getDetector(){
+  if (barcodeDetector !== null) return barcodeDetector || null;
+  try{
+    if ('BarcodeDetector' in window){
+      const fmts = await window.BarcodeDetector.getSupportedFormats();
+      if (fmts.includes('qr_code')){
+        barcodeDetector = new window.BarcodeDetector({ formats: ['qr_code'] });
+        return barcodeDetector;
+      }
     }
-    return false;
-  }
+  }catch(e){}
+  barcodeDetector = false;
+  return null;
 }
 
-/* ---------- camera control ---------- */
-function scanConfig() {
-  return {
-    fps: 10,
-    qrbox: vw => { const m = Math.floor(Math.min(vw.width, vw.height) * 0.8); return { width: m, height: m }; },
-    aspectRatio: 1.0,
-    // native detector is far more reliable on dense QR when available
-    experimentalFeatures: { useBarCodeDetectorIfSupported: true }
-  };
+// Decode a canvas/imagedata source with jsQR (fallback).
+function jsqrDecode(imageData){
+  if (typeof jsQR !== 'function') return null;
+  const r = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
+  return r ? r.data : null;
 }
 
-function startScan() {
-  if (!html5Qr) html5Qr = new Html5Qrcode('reader', { verbose: false });
+/* ---------------- Camera pipeline ---------------- */
+let stream = null, rafId = 0, scanning = false;
+let facing = 'environment', torchOn = false, track = null;
+const video = $('video'), canvas = $('canvas'), ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+function isSecure(){ return window.isSecureContext || ['localhost','127.0.0.1'].includes(location.hostname); }
+
+async function startCamera(){
   $('result').classList.add('hidden');
-  failCount = 0; lastBad = '';
-  setStatus('Starting camera…', '');
-  const constraints = { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } };
-  html5Qr.start(constraints, scanConfig(),
-    decoded => { if (handleScan(decoded)) stopScan(); },
-    () => {}
-  ).then(() => {
-    setStatus('Scanning… fill the box with the QR and hold steady.', '');
-    $('startBtn').classList.add('hidden');
-    $('stopBtn').classList.remove('hidden');
-    // torch support?
-    try {
-      const caps = html5Qr.getRunningTrackCapabilities();
-      if (caps && caps.torch) $('torchBtn').classList.remove('hidden');
-    } catch (e) {}
-  }).catch(err => setStatus('Camera error: ' + escapeHtml(String(err)), 'err'));
-}
-
-function stopScan() {
-  if (html5Qr && html5Qr.isScanning) {
-    html5Qr.stop().then(() => html5Qr.clear()).catch(()=>{});
+  if (!isSecure()){
+    setStatus('🔒 The camera needs a secure page. Open this app over <b>https://</b> ' +
+              '(or localhost). You can still <b>upload a photo</b> below.', 'err');
+    return;
   }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    setStatus('This browser can’t access the camera. Please <b>upload a photo</b> instead.', 'err');
+    return;
+  }
+  setStatus('Starting camera…', 'info');
+  $('startBtn').disabled = true;
+  await getDetector(); // warm up
+
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { facingMode: { ideal: facing }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+    });
+  }catch(err){
+    $('startBtn').disabled = false;
+    return setStatus(cameraErrorMessage(err), 'err');
+  }
+
+  video.srcObject = stream;
+  try { await video.play(); } catch(e){ /* autoplay is enabled; ignore */ }
+  track = stream.getVideoTracks()[0];
+
+  $('placeholder').classList.add('hidden');
+  $('reticle').classList.add('on');
+  $('startBtn').classList.add('hidden');
+  $('startBtn').disabled = false;
+  $('liveRow').classList.remove('hidden');
+  setupTorchAndFlip();
+  setStatus(barcodeDetector ? 'Scanning… fill the frame with the QR.'
+                            : 'Scanning… fill the frame and hold very steady.', 'info');
+
+  scanning = true;
+  scanLoop();
+}
+
+function cameraErrorMessage(err){
+  const n = err && err.name;
+  if (n === 'NotAllowedError' || n === 'SecurityError')
+    return '🚫 Camera permission was blocked. Allow camera access in your browser settings, then tap Start again — or <b>upload a photo</b>.';
+  if (n === 'NotFoundError' || n === 'OverconstrainedError')
+    return 'No suitable camera was found. Try <b>Flip</b>, or <b>upload a photo</b> instead.';
+  if (n === 'NotReadableError')
+    return 'The camera is in use by another app. Close it and try again, or <b>upload a photo</b>.';
+  return 'Camera error: ' + escapeHtml((err && err.message) || String(err)) + '. Try <b>uploading a photo</b>.';
+}
+
+function setupTorchAndFlip(){
+  $('flipBtn').classList.remove('hidden');
+  try{
+    const caps = track.getCapabilities ? track.getCapabilities() : {};
+    if (caps && caps.torch) $('torchBtn').classList.remove('hidden');
+    else $('torchBtn').classList.add('hidden');
+  }catch(e){ $('torchBtn').classList.add('hidden'); }
+}
+
+let lastBad = '', partialCount = 0;
+async function scanLoop(){
+  if (!scanning) return;
+  if (video.readyState >= 2 && video.videoWidth){
+    let text = null;
+    try{
+      if (barcodeDetector){
+        const codes = await barcodeDetector.detect(video);
+        if (codes && codes.length) text = codes[0].rawValue;
+      } else {
+        canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        text = jsqrDecode(ctx.getImageData(0, 0, canvas.width, canvas.height));
+      }
+    }catch(e){ /* transient; keep scanning */ }
+
+    if (text) {
+      try {
+        if (handleDecodedText(text)) { stopCamera(); return; }
+      } catch(e){
+        // Aadhaar QR seen but decoded partially — guide, keep scanning
+        if (e.message === 'PARTIAL_READ'){
+          if (text !== lastBad){ partialCount++; lastBad = text; }
+          setStatus('Reading… got a partial read (attempt ' + partialCount +
+            '). Hold steady & add light — or <b>upload a photo</b> for a guaranteed read.', 'warn');
+        } else if (e.message === 'NOT_AADHAAR'){
+          setStatus('That’s a QR, but not an Aadhaar code.', 'warn');
+        }
+      }
+    }
+  }
+  rafId = requestAnimationFrame(scanLoop);
+}
+
+function stopCamera(){
+  scanning = false;
+  if (rafId) cancelAnimationFrame(rafId), rafId = 0;
+  if (stream){ stream.getTracks().forEach(t => t.stop()); stream = null; }
+  track = null; torchOn = false;
+  video.srcObject = null;
+  $('reticle').classList.remove('on');
+  $('placeholder').classList.remove('hidden');
   $('startBtn').classList.remove('hidden');
-  $('stopBtn').classList.add('hidden');
+  $('liveRow').classList.add('hidden');
   $('torchBtn').classList.add('hidden');
-  torchOn = false;
+  $('flipBtn').classList.add('hidden');
+  $('torchBtn').textContent = '🔦 Torch';
 }
 
-async function toggleTorch() {
-  try {
+async function toggleTorch(){
+  if (!track) return;
+  try{
     torchOn = !torchOn;
-    await html5Qr.applyVideoConstraints({ advanced: [{ torch: torchOn }] });
-    $('torchBtn').textContent = torchOn ? '🔦 Torch off' : '🔦 Torch';
-  } catch (e) { setStatus('Torch not supported on this device.', 'warn'); }
+    await track.applyConstraints({ advanced: [{ torch: torchOn }] });
+    $('torchBtn').textContent = torchOn ? '🔦 Off' : '🔦 Torch';
+  }catch(e){ torchOn = false; setStatus('Torch isn’t supported on this camera.', 'warn'); }
 }
 
-/* ---------- scan from a still photo (most reliable for dense QR) ---------- */
-function scanFromFile(file) {
-  stopScan();
-  setStatus('Reading image…', '');
-  const inst = html5Qr || (html5Qr = new Html5Qrcode('reader', { verbose: false }));
-  inst.scanFile(file, true)
-    .then(decoded => { if (!handleScan(decoded)) { /* message already set */ } })
-    .catch(() => setStatus('No QR found in that image. Use a sharp, well-lit, close-up photo where the QR fills most of the frame.', 'err'));
+async function flipCamera(){
+  facing = (facing === 'environment') ? 'user' : 'environment';
+  stopCamera();
+  await startCamera();
 }
 
-$('startBtn').onclick = startScan;
-$('stopBtn').onclick = () => { stopScan(); setStatus('Stopped.', ''); };
-$('torchBtn').onclick = toggleTorch;
+/* ---------------- Upload a photo (most reliable for dense QR) ---------------- */
+async function scanFromFile(file){
+  stopCamera();
+  $('result').classList.add('hidden');
+  setStatus('Reading image…', 'info');
+  try{
+    const text = await decodeImageFile(file);
+    if (!text){
+      setStatus('No QR found in that image. Use a <b>sharp, well-lit, close-up</b> photo where the QR fills most of the frame and isn’t blurry.', 'err');
+      return;
+    }
+    handleDecodedText(text);
+  }catch(e){
+    if (e.message === 'PARTIAL_READ')
+      setStatus('The QR was found but read only partially — the photo is likely blurry or low-resolution. Retake it sharp and close-up.', 'err');
+    else if (e.message === 'NOT_AADHAAR')
+      setStatus('A QR was found, but it isn’t an Aadhaar code.', 'err');
+    else
+      setStatus('Could not read that image: ' + escapeHtml(e.message), 'err');
+  }
+}
+
+// Try native detector at full resolution first, then jsQR at a few scales.
+async function decodeImageFile(file){
+  const bitmap = await loadBitmap(file);
+  const det = await getDetector();
+
+  if (det){
+    try{
+      const codes = await det.detect(bitmap);
+      if (codes && codes.length) return codes[0].rawValue;
+    }catch(e){ /* fall through to jsQR */ }
+  }
+
+  // jsQR fallback — try full res, then a couple of downscales (helps very large photos).
+  const maxDim = Math.max(bitmap.width, bitmap.height);
+  const scales = [1, 1600 / maxDim, 1000 / maxDim].filter(s => s > 0 && s <= 1);
+  if (scales[0] !== 1) scales.unshift(1);
+  for (const s of scales){
+    const w = Math.round(bitmap.width * s), h = Math.round(bitmap.height * s);
+    if (w < 40 || h < 40) continue;
+    canvas.width = w; canvas.height = h;
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    const text = jsqrDecode(ctx.getImageData(0, 0, w, h));
+    if (text) return text;
+  }
+  return null;
+}
+
+function loadBitmap(file){
+  if ('createImageBitmap' in window)
+    return createImageBitmap(file).catch(() => loadViaImgTag(file));
+  return loadViaImgTag(file);
+}
+function loadViaImgTag(file){
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Unsupported image')); };
+    img.src = url;
+  });
+}
+
+/* ---------------- Wire up ---------------- */
+$('startBtn').onclick   = startCamera;
+$('stopBtn').onclick     = () => { stopCamera(); clearStatus(); };
+$('torchBtn').onclick    = toggleTorch;
+$('flipBtn').onclick      = flipCamera;
 $('photoScanBtn').onclick = () => $('fileInput').click();
-$('fileInput').onchange = e => { if (e.target.files[0]) scanFromFile(e.target.files[0]); e.target.value = ''; };
-$('againBtn').onclick = () => { $('result').classList.add('hidden'); startScan(); };
+$('fileInput').onchange   = e => { const f = e.target.files[0]; if (f) scanFromFile(f); e.target.value = ''; };
+$('againBtn').onclick      = () => { $('result').classList.add('hidden'); clearStatus(); };
+
+// stop the camera if the tab is hidden (saves battery / releases the device)
+document.addEventListener('visibilitychange', () => { if (document.hidden && scanning) stopCamera(); });
+window.addEventListener('pagehide', () => { if (stream) stopCamera(); });
 </script>
 </body>
 </html>

@@ -1,0 +1,20 @@
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
+
+# Node (only used for local verify.js testing)
+node_modules/
+npm-debug.log*
+yarn-error.log*
+package-lock.json
+
+# Claude Code local session data
+.claude/
+
+# Logs & temp
+*.log
+tmp/
