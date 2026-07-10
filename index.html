@@ -201,14 +201,19 @@ function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;',
 const yieldUI = () => new Promise(r => setTimeout(r, 0));
 
 /* ---------------- Aadhaar decoders ---------------- */
+// Always returns an Aadhaar field: full 12-digit if present, else masked last-4,
+// else an explicit note. Modern Secure QRs only carry the last 4 by UIDAI design.
+function aadhaarField(uidRaw){
+  const uid = (uidRaw||'').replace(/\D/g,'');
+  if(/^\d{12}$/.test(uid)) return { 'Aadhaar number': uid.replace(/(\d{4})(\d{4})(\d{4})/,'$1 $2 $3') };
+  if(uid.length>=4)        return { 'Aadhaar (last 4)': 'XXXX XXXX ' + uid.slice(-4) };
+  if(uid.length>0)         return { 'Aadhaar (partial)': uid };
+  return { 'Aadhaar number': 'Not present in this QR' };
+}
+
 function decodeOldXml(text){
   const attr = n => { const m = text.match(new RegExp(n + '="([^"]*)"')); return m ? m[1] : ''; };
-  const uid = (attr('uid')||'').replace(/\s/g,'');
-  // Some old-format QRs embed the full 12-digit number; modern Secure QRs never do.
-  const uidField = /^\d{12}$/.test(uid)
-    ? { 'Aadhaar number': uid }
-    : { 'Aadhaar (last 4)': uid.slice(-4) };
-  return { format:'Old XML QR', data:Object.assign(uidField, {
+  return { format:'Old XML QR', data:Object.assign(aadhaarField(attr('uid')), {
     'Name':attr('name'),'Gender':attr('gender'),
     'Year of birth':attr('yob')||attr('dob'),'Care of':attr('co'),'House':attr('house'),
     'Street':attr('street'),'Landmark':attr('lm'),'Locality':attr('loc'),'VTC':attr('vtc'),
@@ -240,12 +245,12 @@ function decodeSecureQr(bigIntStr){
   const photo=(photoEnd>photoStart)?bytes.slice(photoStart,photoEnd):null;
 
   const ref=f.referenceId||'';
-  return { format:'Secure QR (UIDAI signed)', data:{
-    'Aadhaar (last 4)':ref.slice(0,4),'Name':f.name,'Date of birth':f.dob,
+  return { format:'Secure QR (UIDAI signed)', data:Object.assign(aadhaarField(ref.slice(0,4)), {
+    'Name':f.name,'Date of birth':f.dob,
     'Gender':({M:'Male',F:'Female',T:'Transgender'}[f.gender]||f.gender),
     'Care of':f.careof,'House':f.house,'Street':f.street,'Landmark':f.landmark,
     'Location':f.location,'VTC':f.vtc,'Post office':f.postoffice,'Sub district':f.subdistrict,
-    'District':f.district,'State':f.state,'Pincode':f.pincode }, photo:photo };
+    'District':f.district,'State':f.state,'Pincode':f.pincode }), photo:photo };
 }
 
 function renderResult(res){
